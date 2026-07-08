@@ -1,285 +1,359 @@
 using Age;
+using Age.Polyfills;
 using Age.Recipients;
+using System;
+using System.IO;
 using Xunit;
 
-namespace Age.Tests;
-
-public class PullBasedTests
+namespace Age.Tests
 {
-    [Fact]
-    public void EncryptReader_Decrypt_RoundTrip()
+    public class PullBasedTests
     {
-        using var identity = X25519Identity.Generate();
-        var plaintext = "pull-based encrypt test"u8.ToArray();
+        [Fact]
+        public void EncryptReader_Decrypt_RoundTrip()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = EncodingExtended.UTF8.GetBytes("pull-based encrypt test");
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                {
+                    // Read all encrypted data
+                    using (var ciphertext = new MemoryStream())
+                    {
+                        encryptedStream.CopyTo(ciphertext);
 
-        // Read all encrypted data
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+                        // Decrypt with push-based API
+                        ciphertext.Position = 0;
+                        using (var output = new MemoryStream())
+                        {
+                            AgeEncrypt.Decrypt(ciphertext, output, identity);
 
-        // Decrypt with push-based API
-        ciphertext.Position = 0;
-        using var output = new MemoryStream();
-        AgeEncrypt.Decrypt(ciphertext, output, identity);
+                            Assert.Equal(plaintext, output.ToArray());
+                        }
+                    }
+                }
+            }
+        }
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+        [Fact]
+        public void Encrypt_DecryptReader_RoundTrip()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = EncodingExtended.UTF8.GetBytes("pull-based decrypt test");
 
-    [Fact]
-    public void Encrypt_DecryptReader_RoundTrip()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = "pull-based decrypt test"u8.ToArray();
+                using (var input = new MemoryStream(plaintext))
+                using (var ciphertext = new MemoryStream())
+                {
+                    AgeEncrypt.Encrypt(input, ciphertext, identity.Recipient);
 
-        using var input = new MemoryStream(plaintext);
-        using var ciphertext = new MemoryStream();
-        AgeEncrypt.Encrypt(input, ciphertext, identity.Recipient);
+                    ciphertext.Position = 0;
 
-        ciphertext.Position = 0;
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity);
+                    using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                    using (var output = new MemoryStream())
+                    {
+                        decryptedStream.CopyTo(output);
 
-        using var output = new MemoryStream();
-        decryptedStream.CopyTo(output);
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+        [Fact]
+        public void BothPullBased_RoundTrip()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = EncodingExtended.UTF8.GetBytes("both pull-based");
 
-    [Fact]
-    public void BothPullBased_RoundTrip()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = "both pull-based"u8.ToArray();
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                {
+                    // Pipe encrypted reader into decrypt reader
+                    using (var ciphertextBuffer = new MemoryStream())
+                    {
+                        encryptedStream.CopyTo(ciphertextBuffer);
+                        ciphertextBuffer.Position = 0;
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                        using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertextBuffer, identity))
+                        using (var output = new MemoryStream())
+                        {
+                            decryptedStream.CopyTo(output);
 
-        // Pipe encrypted reader into decrypt reader
-        using var ciphertextBuffer = new MemoryStream();
-        encryptedStream.CopyTo(ciphertextBuffer);
-        ciphertextBuffer.Position = 0;
+                            Assert.Equal(plaintext, output.ToArray());
+                        }
+                    }
+                }
+            }
+        }
 
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertextBuffer, identity);
-        using var output = new MemoryStream();
-        decryptedStream.CopyTo(output);
+        [Fact]
+        public void PartialReads_OneByteAtATime()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = EncodingExtended.UTF8.GetBytes("byte by byte");
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                {
+                    // Read encrypted data one byte at a time
+                    using (var ciphertext = new MemoryStream())
+                    {
+                        var buf = new byte[1];
+                        int read;
+                        while ((read = encryptedStream.Read(buf, 0, 1)) > 0)
+                            ciphertext.Write(buf, 0, read);
 
-    [Fact]
-    public void PartialReads_OneByteAtATime()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = "byte by byte"u8.ToArray();
+                        // Decrypt
+                        ciphertext.Position = 0;
+                        using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                        {
+                            // Also read decrypted one byte at a time
+                            using (var output = new MemoryStream())
+                            {
+                                while ((read = decryptedStream.Read(buf, 0, 1)) > 0)
+                                    output.Write(buf, 0, read);
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                                Assert.Equal(plaintext, output.ToArray());
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        // Read encrypted data one byte at a time
-        using var ciphertext = new MemoryStream();
-        var buf = new byte[1];
-        int read;
-        while ((read = encryptedStream.Read(buf, 0, 1)) > 0)
-            ciphertext.Write(buf, 0, read);
+        [Fact]
+        public void LargeFile_MultiChunk()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = new byte[100_000];
+                new Random(42).NextBytes(plaintext);
 
-        // Decrypt
-        ciphertext.Position = 0;
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    encryptedStream.CopyTo(ciphertext);
 
-        // Also read decrypted one byte at a time
-        using var output = new MemoryStream();
-        while ((read = decryptedStream.Read(buf, 0, 1)) > 0)
-            output.Write(buf, 0, read);
+                    ciphertext.Position = 0;
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                    using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                    using (var output = new MemoryStream())
+                    {
+                        decryptedStream.CopyTo(output);
 
-    [Fact]
-    public void LargeFile_MultiChunk()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = new byte[100_000];
-        new Random(42).NextBytes(plaintext);
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+        [Fact]
+        public void EmptyPlaintext()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = Array.Empty<byte>();
 
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    encryptedStream.CopyTo(ciphertext);
+                    ciphertext.Position = 0;
 
-        ciphertext.Position = 0;
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity);
-        using var output = new MemoryStream();
-        decryptedStream.CopyTo(output);
+                    using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                    using (var output = new MemoryStream())
+                    {
+                        decryptedStream.CopyTo(output);
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-    [Fact]
-    public void EmptyPlaintext()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = Array.Empty<byte>();
+        [Fact]
+        public void Armored_EncryptReader()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = EncodingExtended.UTF8.GetBytes("armored pull test");
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, true, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    encryptedStream.CopyTo(ciphertext);
+                    ciphertext.Position = 0;
 
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+                    using (var output = new MemoryStream())
+                    {
+                        AgeEncrypt.Decrypt(ciphertext, output, identity);
 
-        ciphertext.Position = 0;
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity);
-        using var output = new MemoryStream();
-        decryptedStream.CopyTo(output);
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+        [Fact]
+        public void EncryptReader_CanSeekIsFalse()
+        {
+            using (var identity = X25519Identity.Generate())
+            using (var input = new MemoryStream(EncodingExtended.UTF8.GetBytes("test")))
+            using (var stream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+            {
+                Assert.True(stream.CanRead);
+                Assert.False(stream.CanSeek);
+                Assert.False(stream.CanWrite);
+            }
+        }
 
-    [Fact]
-    public void Armored_EncryptReader()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = "armored pull test"u8.ToArray();
+        [Fact]
+        public void DecryptReader_CanSeekIsFalse()
+        {
+            using (var identity = X25519Identity.Generate())
+            using (var input = new MemoryStream(EncodingExtended.UTF8.GetBytes("test")))
+            using (var ciphertext = new MemoryStream())
+            {
+                AgeEncrypt.Encrypt(input, ciphertext, identity.Recipient);
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, true, identity.Recipient);
+                ciphertext.Position = 0;
 
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+                using (var stream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                {
+                    Assert.True(stream.CanRead);
+                    Assert.False(stream.CanSeek);
+                    Assert.False(stream.CanWrite);
+                }
+            }
+        }
 
-        ciphertext.Position = 0;
-        using var output = new MemoryStream();
-        AgeEncrypt.Decrypt(ciphertext, output, identity);
+        [Fact]
+        public void ExactChunkSize()
+        {
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = new byte[64 * 1024]; // Exactly one chunk
+                new Random(42).NextBytes(plaintext);
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    encryptedStream.CopyTo(ciphertext);
 
-    [Fact]
-    public void EncryptReader_CanSeekIsFalse()
-    {
-        using var identity = X25519Identity.Generate();
-        using var input = new MemoryStream("test"u8.ToArray());
-        using var stream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                    ciphertext.Position = 0;
 
-        Assert.True(stream.CanRead);
-        Assert.False(stream.CanSeek);
-        Assert.False(stream.CanWrite);
-    }
+                    using (var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity))
+                    using (var output = new MemoryStream())
+                    {
+                        decryptedStream.CopyTo(output);
 
-    [Fact]
-    public void DecryptReader_CanSeekIsFalse()
-    {
-        using var identity = X25519Identity.Generate();
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        using var input = new MemoryStream("test"u8.ToArray());
-        using var ciphertext = new MemoryStream();
-        AgeEncrypt.Encrypt(input, ciphertext, identity.Recipient);
+        [Fact]
+        public void Armored_EncryptReader_LargePlaintext_RoundTrip()
+        {
+            // > 1 MiB forces EncryptStream to produce multiple chunks, and
+            // ArmorStream to cycle Begin → Body (many times) → End.
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = new byte[1_500_000];
+                new Random(42).NextBytes(plaintext);
 
-        ciphertext.Position = 0;
-        using var stream = AgeEncrypt.DecryptReader(ciphertext, identity);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, armor: true, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    encryptedStream.CopyTo(ciphertext);
 
-        Assert.True(stream.CanRead);
-        Assert.False(stream.CanSeek);
-        Assert.False(stream.CanWrite);
-    }
+                    ciphertext.Position = 0;
 
-    [Fact]
-    public void ExactChunkSize()
-    {
-        using var identity = X25519Identity.Generate();
-        var plaintext = new byte[64 * 1024]; // Exactly one chunk
-        new Random(42).NextBytes(plaintext);
+                    using (var output = new MemoryStream())
+                    {
+                        AgeEncrypt.Decrypt(ciphertext, output, identity);
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, identity.Recipient);
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+        [Fact]
+        public void Armored_EncryptReader_ByteByByteReads_RoundTrip()
+        {
+            // Stresses ArmorStream's scratch-drain loop: each Read call
+            // takes exactly one byte, crossing Begin/Body/End boundaries
+            // mid-scratch.
+            using (var identity = X25519Identity.Generate())
+            {
+                var plaintext = new byte[500];
+                new Random(42).NextBytes(plaintext);
 
-        ciphertext.Position = 0;
-        using var decryptedStream = AgeEncrypt.DecryptReader(ciphertext, identity);
-        using var output = new MemoryStream();
-        decryptedStream.CopyTo(output);
+                using (var input = new MemoryStream(plaintext))
+                using (var encryptedStream = AgeEncrypt.EncryptReader(input, armor: true, identity.Recipient))
+                using (var ciphertext = new MemoryStream())
+                {
+                    var oneByte = new byte[1];
+                    while (encryptedStream.Read(oneByte, 0, 1) == 1)
+                        ciphertext.WriteByte(oneByte[0]);
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                    ciphertext.Position = 0;
 
-    [Fact]
-    public void Armored_EncryptReader_LargePlaintext_RoundTrip()
-    {
-        // > 1 MiB forces EncryptStream to produce multiple chunks, and
-        // ArmorStream to cycle Begin → Body (many times) → End.
-        using var identity = X25519Identity.Generate();
-        var plaintext = new byte[1_500_000];
-        new Random(42).NextBytes(plaintext);
+                    using (var output = new MemoryStream())
+                    {
+                        AgeEncrypt.Decrypt(ciphertext, output, identity);
 
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, armor: true, identity.Recipient);
+                        Assert.Equal(plaintext, output.ToArray());
+                    }
+                }
+            }
+        }
 
-        using var ciphertext = new MemoryStream();
-        encryptedStream.CopyTo(ciphertext);
+        [Fact]
+        public void Armored_EncryptReader_MatchesPushArmor_ByteForByte()
+        {
+            // ArmorStream (pull) and AsciiArmor.Armor (push) must produce
+            // identical wire output for the same ciphertext. Use a fixed
+            // file key / payload nonce via deterministic inputs isn't
+            // practical, so we compare two outputs from the same plaintext
+            // through each path — they differ only in the recipient stanza
+            // (random ephemeral key) and payload nonce (random). So we
+            // compare *lengths* and re-encrypt round-trip shape. The
+            // stronger invariant — that both decrypt back to the same
+            // plaintext — is implied by the other two tests passing.
+            //
+            // Here we instead check a tighter invariant: feed a fixed byte
+            // stream directly to both ArmorStream and AsciiArmor.Armor and
+            // require byte-identical output.
+            var fixedCiphertext = new byte[200_000];
+            new Random(7).NextBytes(fixedCiphertext);
 
-        ciphertext.Position = 0;
-        using var output = new MemoryStream();
-        AgeEncrypt.Decrypt(ciphertext, output, identity);
+            using (var pullSource = new MemoryStream(fixedCiphertext))
+            using (var pullArmor = new Age.Format.ArmorStream(pullSource))
+            using (var pullOut = new MemoryStream())
+            {
+                pullArmor.CopyTo(pullOut);
 
-        Assert.Equal(plaintext, output.ToArray());
-    }
+                using (var pushSource = new MemoryStream(fixedCiphertext))
+                using (var pushOut = new MemoryStream())
+                {
+                    Age.Format.AsciiArmor.Armor(pushSource, pushOut);
 
-    [Fact]
-    public void Armored_EncryptReader_ByteByByteReads_RoundTrip()
-    {
-        // Stresses ArmorStream's scratch-drain loop: each Read call
-        // takes exactly one byte, crossing Begin/Body/End boundaries
-        // mid-scratch.
-        using var identity = X25519Identity.Generate();
-        var plaintext = new byte[500];
-        new Random(42).NextBytes(plaintext);
-
-        using var input = new MemoryStream(plaintext);
-        using var encryptedStream = AgeEncrypt.EncryptReader(input, armor: true, identity.Recipient);
-
-        using var ciphertext = new MemoryStream();
-        var oneByte = new byte[1];
-        while (encryptedStream.Read(oneByte, 0, 1) == 1)
-            ciphertext.WriteByte(oneByte[0]);
-
-        ciphertext.Position = 0;
-        using var output = new MemoryStream();
-        AgeEncrypt.Decrypt(ciphertext, output, identity);
-
-        Assert.Equal(plaintext, output.ToArray());
-    }
-
-    [Fact]
-    public void Armored_EncryptReader_MatchesPushArmor_ByteForByte()
-    {
-        // ArmorStream (pull) and AsciiArmor.Armor (push) must produce
-        // identical wire output for the same ciphertext. Use a fixed
-        // file key / payload nonce via deterministic inputs isn't
-        // practical, so we compare two outputs from the same plaintext
-        // through each path — they differ only in the recipient stanza
-        // (random ephemeral key) and payload nonce (random). So we
-        // compare *lengths* and re-encrypt round-trip shape. The
-        // stronger invariant — that both decrypt back to the same
-        // plaintext — is implied by the other two tests passing.
-        //
-        // Here we instead check a tighter invariant: feed a fixed byte
-        // stream directly to both ArmorStream and AsciiArmor.Armor and
-        // require byte-identical output.
-        var fixedCiphertext = new byte[200_000];
-        new Random(7).NextBytes(fixedCiphertext);
-
-        using var pullSource = new MemoryStream(fixedCiphertext);
-        using var pullArmor = new Age.Format.ArmorStream(pullSource);
-        using var pullOut = new MemoryStream();
-        pullArmor.CopyTo(pullOut);
-
-        using var pushSource = new MemoryStream(fixedCiphertext);
-        using var pushOut = new MemoryStream();
-        Age.Format.AsciiArmor.Armor(pushSource, pushOut);
-
-        Assert.Equal(pushOut.ToArray(), pullOut.ToArray());
+                    Assert.Equal(pushOut.ToArray(), pullOut.ToArray());
+                }
+            }
+        }
     }
 }

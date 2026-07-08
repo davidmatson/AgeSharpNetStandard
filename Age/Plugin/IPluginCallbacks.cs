@@ -1,8 +1,9 @@
-namespace Age.Plugin;
-
-public interface IPluginCallbacks
+namespace Age.Plugin
 {
-    void DisplayMessage(string message);
-    string RequestValue(string prompt, bool secret);
-    bool Confirm(string message, string yes, string? no);
+    public interface IPluginCallbacks
+    {
+        void DisplayMessage(string message);
+        string RequestValue(string prompt, bool secret);
+        bool Confirm(string message, string yes, string no);
+    }
 }

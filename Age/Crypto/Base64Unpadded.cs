@@ -1,70 +1,74 @@
-namespace Age.Crypto;
+using System;
+using Age.Polyfills;
 
-internal static class Base64Unpadded
+namespace Age.Crypto
 {
-    private const int StackAllocThreshold = 256;
-
-    public static string Encode(ReadOnlySpan<byte> data)
+    internal static class Base64Unpadded
     {
-        if (data.IsEmpty)
-            return "";
+        private const int StackAllocThreshold = 256;
 
-        var maxLen = (data.Length + 2) / 3 * 4;
+        public static string Encode(ReadOnlySpan<byte> data)
+        {
+            if (data.IsEmpty)
+                return "";
 
-        var buf = maxLen <= StackAllocThreshold
-            ? stackalloc char[maxLen]
-            : new char[maxLen];
+            var maxLen = (data.Length + 2) / 3 * 4;
 
-        return Convert.TryToBase64Chars(data, buf, out var written)
-            ? new string(buf[..written].TrimEnd('='))
-            : throw new InvalidOperationException("base64 encode failed");
-    }
+            var buf = maxLen <= StackAllocThreshold
+                ? stackalloc char[maxLen]
+                : new char[maxLen];
 
-    public static byte[] Decode(ReadOnlySpan<char> chars)
-    {
-        if (chars.IsEmpty)
-            return [];
+            return ConvertExtended.TryToBase64Chars(data, buf, out var written)
+                ? new string(buf.Slice(0, written).TrimEnd('=').ToArray())
+                : throw new InvalidOperationException("base64 encode failed");
+        }
 
-        if (chars.Contains('='))
-            throw new FormatException("base64 input must not contain padding");
+        public static byte[] Decode(ReadOnlySpan<char> chars)
+        {
+            if (chars.IsEmpty)
+                return new byte[] { };
 
-        var decoded = DecodeWithPadding(chars);
-        VerifyCanonical(decoded, chars);
+            if (chars.Contains('='))
+                throw new FormatException("base64 input must not contain padding");
 
-        return decoded;
-    }
+            var decoded = DecodeWithPadding(chars);
+            VerifyCanonical(decoded, chars);
 
-    private static byte[] DecodeWithPadding(ReadOnlySpan<char> chars)
-    {
-        var paddedLen = (chars.Length + 3) / 4 * 4;
+            return decoded;
+        }
 
-        var padded = paddedLen <= StackAllocThreshold
-            ? stackalloc char[paddedLen]
-            : new char[paddedLen];
+        private static byte[] DecodeWithPadding(ReadOnlySpan<char> chars)
+        {
+            var paddedLen = (chars.Length + 3) / 4 * 4;
 
-        padded[chars.Length..].Fill('=');
-        chars.CopyTo(padded);
+            var padded = paddedLen <= StackAllocThreshold
+                ? stackalloc char[paddedLen]
+                : new char[paddedLen];
 
-        var result = new byte[paddedLen / 4 * 3];
+            padded.Slice(chars.Length).Fill('=');
+            chars.CopyTo(padded);
 
-        return Convert.TryFromBase64Chars(padded, result, out var bytesWritten)
-            ? result[..bytesWritten]
-            : throw new FormatException("invalid base64 input");
-    }
+            var result = new byte[paddedLen / 4 * 3];
 
-    private static void VerifyCanonical(ReadOnlySpan<byte> decoded, ReadOnlySpan<char> originalChars)
-    {
-        var maxLen = (decoded.Length + 2) / 3 * 4;
+            return ConvertExtended.TryFromBase64Chars(padded, result, out var bytesWritten)
+                ? result.AsSpan().Slice(0, bytesWritten).ToArray()
+                : throw new FormatException("invalid base64 input");
+        }
 
-        var reencoded = maxLen <= StackAllocThreshold
-            ? stackalloc char[maxLen]
-            : new char[maxLen];
+        private static void VerifyCanonical(ReadOnlySpan<byte> decoded, ReadOnlySpan<char> originalChars)
+        {
+            var maxLen = (decoded.Length + 2) / 3 * 4;
 
-        if (!Convert.TryToBase64Chars(decoded, reencoded, out var written))
-            throw new FormatException("canonicality check failed");
+            var reencoded = maxLen <= StackAllocThreshold
+                ? stackalloc char[maxLen]
+                : new char[maxLen];
 
-        var trimmed = reencoded[..written].TrimEnd('=');
-        if (!trimmed.SequenceEqual(originalChars))
-            throw new FormatException("non-canonical base64 encoding");
+            if (!ConvertExtended.TryToBase64Chars(decoded, reencoded, out var written))
+                throw new FormatException("canonicality check failed");
+
+            var trimmed = reencoded.Slice(0, written).TrimEnd('=');
+            if (!trimmed.SequenceEqual(originalChars))
+                throw new FormatException("non-canonical base64 encoding");
+        }
     }
 }

@@ -1,60 +1,64 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using Age.Format;
 
-namespace Age;
-
-public sealed class AgeHeader
+namespace Age
 {
-    public int RecipientCount { get; }
-    public IReadOnlyList<Stanza> Recipients { get; }
-    public long PayloadOffset { get; }
-    public bool IsArmored { get; }
-
-    private AgeHeader(IReadOnlyList<Stanza> recipients, long payloadOffset, bool isArmored)
+    public sealed class AgeHeader
     {
-        RecipientCount = recipients.Count;
-        Recipients = recipients;
-        PayloadOffset = payloadOffset;
-        IsArmored = isArmored;
-    }
+        public int RecipientCount { get; }
+        public IReadOnlyList<Stanza> Recipients { get; }
+        public long PayloadOffset { get; }
+        public bool IsArmored { get; }
 
-    public static AgeHeader Parse(Stream input)
-    {
-        var isArmored = false;
-        Stream binaryInput;
-        var needsDispose = false;
-
-        if (input.CanSeek && AsciiArmor.IsArmored(input))
+        private AgeHeader(IReadOnlyList<Stanza> recipients, long payloadOffset, bool isArmored)
         {
-            isArmored = true;
-            binaryInput = AsciiArmor.Dearmor(input);
-            needsDispose = true;
-        }
-        else
-        {
-            binaryInput = input;
+            RecipientCount = recipients.Count;
+            Recipients = recipients;
+            PayloadOffset = payloadOffset;
+            IsArmored = isArmored;
         }
 
-        try
+        public static AgeHeader Parse(Stream input)
         {
-            var reader = new HeaderReader(binaryInput);
+            var isArmored = false;
+            Stream binaryInput;
+            var needsDispose = false;
 
-            Header header;
+            if (input.CanSeek && AsciiArmor.IsArmored(input))
+            {
+                isArmored = true;
+                binaryInput = AsciiArmor.Dearmor(input);
+                needsDispose = true;
+            }
+            else
+            {
+                binaryInput = input;
+            }
+
             try
             {
-                header = Header.Parse(reader);
-            }
-            catch (FormatException ex)
-            {
-                throw new AgeHeaderException($"header parse error: {ex.Message}", ex);
-            }
+                var reader = new HeaderReader(binaryInput);
 
-            var payloadOffset = reader.RawBytes.Length;
-            return new AgeHeader(header.Stanzas.AsReadOnly(), payloadOffset, isArmored);
-        }
-        finally
-        {
-            if (needsDispose)
-                binaryInput.Dispose();
+                Header header;
+                try
+                {
+                    header = Header.Parse(reader);
+                }
+                catch (FormatException ex)
+                {
+                    throw new AgeHeaderException($"header parse error: {ex.Message}", ex);
+                }
+
+                var payloadOffset = reader.RawBytes.Length;
+                return new AgeHeader(header.Stanzas.AsReadOnly(), payloadOffset, isArmored);
+            }
+            finally
+            {
+                if (needsDispose)
+                    binaryInput.Dispose();
+            }
         }
     }
 }

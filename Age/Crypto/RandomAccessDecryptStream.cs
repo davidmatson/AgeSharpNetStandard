@@ -1,62 +1,87 @@
-namespace Age.Crypto;
+using System;
+using System.IO;
+using Age.Polyfills;
 
-internal sealed class RandomAccessDecryptStream(AgeRandomAccess reader, long initialOffset) : Stream
+namespace Age.Crypto
 {
-    private long _position = initialOffset;
-    private readonly long _length = reader.PlaintextLength;
-
-    public override bool CanRead => true;
-    public override bool CanSeek => true;
-    public override bool CanWrite => false;
-    public override long Length => _length;
-
-    public override long Position
+    internal sealed class RandomAccessDecryptStream : Stream
     {
-        get => _position;
-        set
+        readonly AgeRandomAccess _reader;
+        readonly long _initialOffset;
+
+        public RandomAccessDecryptStream(AgeRandomAccess reader, long initialOffset)
         {
-            ArgumentOutOfRangeException.ThrowIfNegative(value);
-            _position = value;
+            _reader = reader;
+            _initialOffset = initialOffset;
+            _position = _initialOffset;
+            _length = _reader.PlaintextLength;
         }
-    }
 
-    public override int Read(byte[] buffer, int offset, int count)
-        => Read(buffer.AsSpan(offset, count));
+        private long _position;
+        private readonly long _length;
 
-    public override int Read(Span<byte> buffer)
-    {
-        if (_position >= _length)
-            return 0;
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => _length;
 
-        var read = reader.ReadAt(_position, buffer);
-        _position += read;
-
-        return read;
-    }
-
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        var newPos = origin switch
+        public override long Position
         {
-            SeekOrigin.Begin => offset,
-            SeekOrigin.Current => _position + offset,
-            SeekOrigin.End => _length + offset,
-            _ => throw new ArgumentOutOfRangeException(nameof(origin))
-        };
+            get => _position;
+            set
+            {
+                ArgumentOutOfRangeExceptionExtended.ThrowIfNegative(value);
+                _position = value;
+            }
+        }
 
-        ArgumentOutOfRangeException.ThrowIfNegative(newPos, nameof(offset));
+        public override int Read(byte[] buffer, int offset, int count)
+            => Read(buffer.AsSpan(offset, count));
 
-        _position = newPos;
-        return _position;
+        public int Read(Span<byte> buffer)
+        {
+            if (_position >= _length)
+                return 0;
+
+            var read = _reader.ReadAt(_position, buffer);
+            _position += read;
+
+            return read;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            long newPos;
+
+            switch (origin)
+            {
+                case SeekOrigin.Begin:
+                    newPos = offset;
+                    break;
+                case SeekOrigin.Current:
+                    newPos = _position + offset;
+                    break;
+                case SeekOrigin.End:
+                    newPos = _length + offset;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(origin));
+            }
+
+            ArgumentOutOfRangeExceptionExtended.ThrowIfNegative(newPos, nameof(offset));
+
+            _position = newPos;
+            return _position;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
-
-    public override void Flush()
-    {
-    }
-
-    public override void SetLength(long value) =>
-        throw new NotSupportedException();
-
-    public override void Write(byte[] buffer, int offset, int count) =>
-        throw new NotSupportedException();
 }

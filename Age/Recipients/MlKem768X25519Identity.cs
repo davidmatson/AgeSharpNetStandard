@@ -1,97 +1,106 @@
+using System;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using Age.Crypto;
 using Age.Format;
+using Age.Polyfills;
 
-namespace Age.Recipients;
-
-public sealed class MlKem768X25519Identity : IIdentity, IDisposable
+namespace Age.Recipients
 {
-    private const string Hrp = "AGE-SECRET-KEY-PQ-";
-    private const int SeedSize = 32;
-    private const int WrappedKeySize = 32; // 16-byte file key + 16-byte Poly1305 tag
-
-    private readonly byte[] _seed; // 32 bytes
-    private bool _disposed;
-
-    private MlKem768X25519Identity(byte[] seed)
+    public sealed class MlKem768X25519Identity : IIdentity, IDisposable
     {
-        _seed = seed;
-    }
+        private const string Hrp = "AGE-SECRET-KEY-PQ-";
+        private const int SeedSize = 32;
+        private const int WrappedKeySize = 32; // 16-byte file key + 16-byte Poly1305 tag
 
-    public MlKem768X25519Recipient Recipient =>
-        new(XWing.GeneratePublicKey(_seed));
+        private readonly byte[] _seed; // 32 bytes
+        private bool _disposed;
 
-    public static MlKem768X25519Identity Generate()
-    {
-        var seed = new byte[SeedSize];
-        RandomNumberGenerator.Fill(seed);
-        return new MlKem768X25519Identity(seed);
-    }
-
-    public static MlKem768X25519Identity Parse(string s)
-    {
-        // Must be uppercase
-        if (s != s.ToUpperInvariant())
-            throw new FormatException("age secret key must be uppercase");
-
-        var (hrp, data) = Bech32.Decode(s);
-
-        if (!string.Equals(hrp, Hrp, StringComparison.OrdinalIgnoreCase))
-            throw new FormatException($"expected HRP '{Hrp}', got '{hrp}'");
-
-        if (data.Length != SeedSize)
-            throw new FormatException($"ML-KEM-768-X25519 seed must be {SeedSize} bytes, got {data.Length}");
-
-        var seed = new byte[SeedSize];
-        Array.Copy(data, seed, SeedSize);
-        CryptographicOperations.ZeroMemory(data);
-        return new MlKem768X25519Identity(seed);
-    }
-
-    public override string ToString()
-    {
-        var seedCopy = new byte[SeedSize];
-        Array.Copy(_seed, seedCopy, SeedSize);
-
-        var result = Bech32.Encode(Hrp, seedCopy).ToUpperInvariant();
-        CryptographicOperations.ZeroMemory(seedCopy);
-        return result;
-    }
-
-    public byte[]? Unwrap(Stanza stanza)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        if (stanza.Type != AgeProtocol.MlKemStanzaType)
-            return null;
-
-        if (stanza.Args.Count != 1)
-            throw new AgeHeaderException($"mlkem768x25519 stanza must have exactly 1 argument, got {stanza.Args.Count}");
-
-        byte[] enc;
-        try
+        private MlKem768X25519Identity(byte[] seed)
         {
-            enc = Base64Unpadded.Decode(stanza.Args[0]);
-        }
-        catch (FormatException ex)
-        {
-            throw new AgeHeaderException($"invalid mlkem768x25519 enc encoding: {ex.Message}", ex);
+            _seed = seed;
         }
 
-        if (enc.Length != XWing.EncSize)
-            throw new AgeHeaderException($"mlkem768x25519 enc must be {XWing.EncSize} bytes, got {enc.Length}");
+        public MlKem768X25519Recipient Recipient =>
+            new MlKem768X25519Recipient(XWing.GeneratePublicKey(_seed));
 
-        return stanza.Body.Length == WrappedKeySize
-            ? HpkeHelper.OpenBase(enc, _seed, AgeProtocol.MlKemHpkeInfo, stanza.Body.ToArray())
-            : throw new AgeHeaderException($"mlkem768x25519 stanza body must be {WrappedKeySize} bytes, got {stanza.Body.Length}");
-    }
+        public static MlKem768X25519Identity Generate()
+        {
+            var seed = new byte[SeedSize];
+            RandomNumberGeneratorExtended.Fill(seed);
+            return new MlKem768X25519Identity(seed);
+        }
 
-    public void Dispose()
-    {
-        if (_disposed)
-            return;
+        public static MlKem768X25519Identity Parse(string s)
+        {
+            // Must be uppercase
+            if (s != s.ToUpperInvariant())
+                throw new FormatException("age secret key must be uppercase");
 
-        _disposed = true;
-        CryptographicOperations.ZeroMemory(_seed);
+            var (hrp, data) = Bech32.Decode(s);
+
+            if (!string.Equals(hrp, Hrp, StringComparison.OrdinalIgnoreCase))
+                throw new FormatException($"expected HRP '{Hrp}', got '{hrp}'");
+
+            if (data.Length != SeedSize)
+                throw new FormatException($"ML-KEM-768-X25519 seed must be {SeedSize} bytes, got {data.Length}");
+
+            var seed = new byte[SeedSize];
+            Array.Copy(data, seed, SeedSize);
+            CryptographicOperations.ZeroMemory(data);
+            return new MlKem768X25519Identity(seed);
+        }
+
+        public override string ToString()
+        {
+            var seedCopy = new byte[SeedSize];
+            Array.Copy(_seed, seedCopy, SeedSize);
+
+            var result = Bech32.Encode(Hrp, seedCopy).ToUpperInvariant();
+            CryptographicOperations.ZeroMemory(seedCopy);
+            return result;
+        }
+
+        public byte[] Unwrap(Stanza stanza)
+        {
+            ObjectDisposedExceptionExtended.ThrowIf(_disposed, this);
+
+            if (stanza.Type != AgeProtocol.MlKemStanzaType)
+                return null;
+
+            if (stanza.Args.Count != 1)
+                throw new AgeHeaderException($"mlkem768x25519 stanza must have exactly 1 argument, got {stanza.Args.Count}");
+
+            byte[] enc;
+            try
+            {
+                enc = Base64Unpadded.Decode(stanza.Args[0].AsSpan());
+            }
+            catch (FormatException ex)
+            {
+                throw new AgeHeaderException($"invalid mlkem768x25519 enc encoding: {ex.Message}", ex);
+            }
+
+            if (enc.Length != XWing.EncSize)
+                throw new AgeHeaderException($"mlkem768x25519 enc must be {XWing.EncSize} bytes, got {enc.Length}");
+
+            return stanza.Body.Length == WrappedKeySize
+                ? HpkeHelper.OpenBase(enc, _seed, AgeProtocol.MlKemHpkeInfo, stanza.Body.ToArray())
+                : throw new AgeHeaderException($"mlkem768x25519 stanza body must be {WrappedKeySize} bytes, got {stanza.Body.Length}");
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            CryptographicOperations.ZeroMemory(_seed);
+        }
+
+        public byte[] Unwrap(IReadOnlyList<Stanza> stanzas)
+        {
+            return DefaultIdentity.Unwrap(this, stanzas);
+        }
     }
 }

@@ -1,87 +1,93 @@
+using System;
+using System.Linq;
 using System.Security.Cryptography;
 using Age.Crypto;
 using Age.Format;
+using Age.Polyfills;
 using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 
-namespace Age.Recipients;
-
-public sealed class X25519Recipient : IRecipient
+namespace Age.Recipients
 {
-    private const string Hrp = "age";
-    private const int KeySize = 32;
-
-    private readonly X25519PublicKeyParameters _publicKey;
-
-    internal X25519Recipient(X25519PublicKeyParameters publicKey)
+    public sealed class X25519Recipient : IRecipient
     {
-        _publicKey = publicKey;
-    }
+        private const string Hrp = "age";
+        private const int KeySize = 32;
 
-    public static X25519Recipient Parse(string s)
-    {
-        var (hrp, data) = Bech32.Decode(s);
-        
-        if (hrp != Hrp)
-            throw new FormatException($"expected HRP '{Hrp}', got '{hrp}'");
-        
-        if (data.Length != KeySize)
-            throw new FormatException($"X25519 public key must be {KeySize} bytes, got {data.Length}");
+        private readonly X25519PublicKeyParameters _publicKey;
 
-        // Must be lowercase
-        if (s != s.ToLowerInvariant())
-            throw new FormatException("age recipient must be lowercase");
-
-        return new X25519Recipient(new X25519PublicKeyParameters(data));
-    }
-
-    public override string ToString() =>
-        Bech32.Encode(Hrp, _publicKey.GetEncoded());
-
-    public Stanza Wrap(ReadOnlySpan<byte> fileKey)
-    {
-        // Generate ephemeral X25519 key pair
-        var ephemeral = new X25519PrivateKeyParameters(new SecureRandom());
-        var ephPubBytes = ephemeral.GeneratePublicKey().GetEncoded();
-
-        // DH: ephemeral × recipient
-        var agreement = new X25519Agreement();
-        agreement.Init(ephemeral);
-        var sharedSecret = new byte[agreement.AgreementSize];
-
-        try
+        internal X25519Recipient(X25519PublicKeyParameters publicKey)
         {
-            agreement.CalculateAgreement(_publicKey, sharedSecret, 0);
-        }
-        catch (InvalidOperationException)
-        {
-            throw new AgeException("X25519 key agreement failed (shared secret is zero)");
+            _publicKey = publicKey;
         }
 
-        // BouncyCastle may not reject all low-order points — check for all-zero shared secret
-        if (sharedSecret.All(b => b == 0))
-            throw new AgeException("X25519 key agreement failed (shared secret is zero)");
+        public string Label => null;
 
-        // HKDF: salt = ephPub || recipientPub, info = label
-        var recipientPubBytes = _publicKey.GetEncoded();
-        var salt = (byte[])[.. ephPubBytes, .. recipientPubBytes];
-
-        var wrapKey = CryptoHelper.HkdfDerive(sharedSecret, salt, AgeProtocol.X25519HkdfLabel, KeySize);
-
-        try
+        public static X25519Recipient Parse(string s)
         {
-            // Encrypt file key with ChaCha20-Poly1305, zero nonce
-            var zeroNonce = new byte[12];
-            var body = CryptoHelper.ChaChaEncrypt(wrapKey, zeroNonce, fileKey);
+            var (hrp, data) = Bech32.Decode(s);
 
-            var ephPubB64 = Base64Unpadded.Encode(ephPubBytes);
-            return new Stanza(AgeProtocol.X25519StanzaType, [ephPubB64], body);
+            if (hrp != Hrp)
+                throw new FormatException($"expected HRP '{Hrp}', got '{hrp}'");
+
+            if (data.Length != KeySize)
+                throw new FormatException($"X25519 public key must be {KeySize} bytes, got {data.Length}");
+
+            // Must be lowercase
+            if (s != s.ToLowerInvariant())
+                throw new FormatException("age recipient must be lowercase");
+
+            return new X25519Recipient(new X25519PublicKeyParameters(data));
         }
-        finally
+
+        public override string ToString() =>
+            Bech32.Encode(Hrp, _publicKey.GetEncoded());
+
+        public Stanza Wrap(ReadOnlySpan<byte> fileKey)
         {
-            CryptographicOperations.ZeroMemory(wrapKey);
-            CryptographicOperations.ZeroMemory(sharedSecret);
+            // Generate ephemeral X25519 key pair
+            var ephemeral = new X25519PrivateKeyParameters(new SecureRandom());
+            var ephPubBytes = ephemeral.GeneratePublicKey().GetEncoded();
+
+            // DH: ephemeral × recipient
+            var agreement = new X25519Agreement();
+            agreement.Init(ephemeral);
+            var sharedSecret = new byte[agreement.AgreementSize];
+
+            try
+            {
+                agreement.CalculateAgreement(_publicKey, sharedSecret, 0);
+            }
+            catch (InvalidOperationException)
+            {
+                throw new AgeException("X25519 key agreement failed (shared secret is zero)");
+            }
+
+            // BouncyCastle may not reject all low-order points — check for all-zero shared secret
+            if (sharedSecret.All(b => b == 0))
+                throw new AgeException("X25519 key agreement failed (shared secret is zero)");
+
+            // HKDF: salt = ephPub || recipientPub, info = label
+            var recipientPubBytes = _publicKey.GetEncoded();
+            var salt = ArrayFactory.Concatenate(ephPubBytes, recipientPubBytes);
+
+            var wrapKey = CryptoHelper.HkdfDerive(sharedSecret, salt, AgeProtocol.X25519HkdfLabel, KeySize);
+
+            try
+            {
+                // Encrypt file key with ChaCha20-Poly1305, zero nonce
+                var zeroNonce = new byte[12];
+                var body = CryptoHelper.ChaChaEncrypt(wrapKey, zeroNonce, fileKey);
+
+                var ephPubB64 = Base64Unpadded.Encode(ephPubBytes);
+                return new Stanza(AgeProtocol.X25519StanzaType, new[] { ephPubB64 }, body);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(wrapKey);
+                CryptographicOperations.ZeroMemory(sharedSecret);
+            }
         }
     }
 }
