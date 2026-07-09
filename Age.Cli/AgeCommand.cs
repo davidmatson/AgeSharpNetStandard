@@ -354,10 +354,46 @@ namespace Age.Cli
 
             public bool Confirm(string message, string yes, string no)
             {
-                var options = no != null ? $"[{yes}/{no}]" : $"[{yes}]";
-                Console.Error.Write($"{message} {options} ");
-                var response = Console.ReadLine()?.Trim() ?? "";
-                return string.Equals(response, yes, StringComparison.OrdinalIgnoreCase);
+                var options = $"[y: {yes}/n: {no ?? "no"}] (y/N): ";
+                Console.Error.Write($"{message} {options}");
+                string response;
+                bool result;
+                bool first = true;
+
+                do
+                {
+                    if (!first)
+                    {
+                        Console.Error.Write("Please enter y (yes) or n (no) (y/N): ");
+                    }
+
+                    response = Console.ReadLine()?.Trim() ?? "";
+                    first = false;
+                } while (!TryParseConfirmResponse(response, out result));
+
+                return result;
+            }
+
+            private static bool TryParseConfirmResponse(string response, out bool parsed)
+            {
+                if (response.Equals("y", StringComparison.OrdinalIgnoreCase) ||
+                    response.Equals("yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    parsed = true;
+                    return true;
+                }
+                else if (response.Length == 0 ||
+                    response.Equals("n", StringComparison.OrdinalIgnoreCase) ||
+                    response.Equals("no", StringComparison.OrdinalIgnoreCase))
+                {
+                    parsed = false;
+                    return true;
+                }
+                else
+                {
+                    parsed = default;
+                    return false;
+                }
             }
         }
     }

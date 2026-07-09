@@ -135,10 +135,10 @@ namespace Age.Recipients
         private void HandleConfirm(PluginConnection conn, string[] args, byte[] body)
         {
             var message = EncodingExtended.UTF8.GetString(body);
-            var yes = args.Length > 0 ? args[0] : "yes";
-            var no = args.Length > 1 ? args[1] : null;
+            var yes = args.Length > 0 ? EncodingExtended.UTF8.GetString(Base64Unpadded.Decode(args[0].AsSpan())) : "yes";
+            var no = args.Length > 1 ? EncodingExtended.UTF8.GetString(Base64Unpadded.Decode(args[1].AsSpan())) : null;
             var confirmed = _callbacks.Confirm(message, yes, no);
-            conn.WriteStanza(confirmed ? "ok" : "fail", Array.Empty<string>(), Array.Empty<byte>());
+            conn.WriteStanza("ok", new[] { confirmed ? "yes" : "no" }, Array.Empty<byte>());
         }
 
         internal static string ExtractPluginName(string identity)
